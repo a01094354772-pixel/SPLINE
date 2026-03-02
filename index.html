@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Motion Agent-V: 100Hz 물리 궤적 및 선회 복원</title>
+    <title>Motion Agent-V: 100Hz 물리 궤적 및 관성 곡선 복원</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
@@ -29,6 +29,8 @@
         .data-item { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px solid #111; color: #666; }
         .data-item.knot { color: var(--neon); font-weight: bold; border-left: 3px solid var(--neon); padding-left: 10px; background: rgba(222, 255, 154, 0.05); }
         .data-item.high-res { color: #aaa; }
+        .data-item.impact { color: #fff; background: var(--danger); font-weight: 900; }
+        .data-item.inertia { color: var(--orange); font-style: italic; }
 
         .btn { background: var(--neon); color: #000; border: none; padding: 15px; border-radius: 12px; font-weight: 800; cursor: pointer; width: 100%; margin-top: 20px; transition: 0.2s; }
         .btn:hover { transform: translateY(-2px); box-shadow: 0 5px 15px rgba(222, 255, 154, 0.3); }
@@ -51,11 +53,11 @@
 <div class="container">
     <div class="header">
         <div>
-            <h1 class="title"><i class="fa-solid fa-arrows-spin"></i> 100Hz 물리 궤적 및 선회 복원 시뮬레이터</h1>
-            <p style="font-size: 14px; color: #666; margin-top: 5px;">Manned DTG (1Hz) &rarr; 조향각 연동 2D 좌표 복원 (0.01s 고해상도)</p>
+            <h1 class="title"><i class="fa-solid fa-arrows-spin"></i> 100Hz 물리 궤적 및 관성 곡선 시뮬레이터</h1>
+            <p style="font-size: 14px; color: #666; margin-top: 5px;">Manned DTG (1Hz) &rarr; 비탄성 충돌 및 관성 곡선 감쇠(Inertial Decay) 복원</p>
         </div>
         <div style="text-align: right;">
-            <span style="background: var(--purple); color:#fff; padding: 6px 15px; border-radius: 5px; font-size: 11px; font-weight: 800; letter-spacing: 0.5px;">실제 사고 회피 기동 시나리오</span>
+            <span style="background: var(--orange); color:#fff; padding: 6px 15px; border-radius: 5px; font-size: 11px; font-weight: 800; letter-spacing: 0.5px;">비탄성 충돌 물리 모델 적용</span>
         </div>
     </div>
 
@@ -63,22 +65,22 @@
         <div class="card">
             <h3 style="margin-top:0;"><i class="fa-solid fa-microchip"></i> 0.01초 단위 정밀 데이터 로그 (Total 500 Samples)</h3>
             <div class="raw-data-list" id="log-list">
-                <div style="text-align: center; color: #444; margin-top: 150px;">'물리 엔진 가동' 클릭 시<br>누락 없는 100Hz 로그가 산출됩니다.</div>
+                <div style="text-align: center; color: #444; margin-top: 150px;">'물리 엔진 가동' 클릭 시<br>현실적인 충돌 감쇠 로그가 산출됩니다.</div>
             </div>
-            <button class="btn" onclick="startRestoration()">물리 엔진 가동 (0.01s Step)</button>
+            <button class="btn" onclick="startRestoration()">물리 엔진 가동 (곡선 감쇠 적용)</button>
             <div class="physics-info">
-                <strong>정밀도 증명:</strong> 1Hz(빨간 점) 사이의 1초 구간을 100개의 개별 샘플(dt=0.01)로 복원합니다. 모든 물리량은 <strong>0.01초 단위로 적분</strong>되어 오차를 최소화합니다.
+                <strong>비탄성 충돌 곡선:</strong> 충돌 직후 70%의 에너지가 즉각 소실되며, 남은 30%의 에너지는 노면과의 비선형 마찰 저항에 의해 <strong>지수 함수적으로 감쇠</strong>하며 곡선을 그립니다.
             </div>
         </div>
 
         <div class="card">
             <div class="charts-grid">
                 <div class="chart-container">
-                    <div class="chart-label">주행 물리 타임라인 (Speed & Distance)</div>
+                    <div class="chart-label">주행 물리 타임라인 (Exponential Decay)</div>
                     <canvas id="hybridChart"></canvas>
                 </div>
                 <div class="chart-container">
-                    <div class="chart-label">2D 주행 평면 궤적 (X-Y Path Map - 회피 기동)</div>
+                    <div class="chart-label">2D 주행 평면 궤적 (Post-impact Deflection)</div>
                     <canvas id="pathChart"></canvas>
                 </div>
             </div>
@@ -106,15 +108,13 @@
 
 <script>
     let hybridChart, pathChart;
-    // 시연용 1Hz 원천 데이터 (Knot Points)
-    // 궤적 수정: 직진 -> 급조향(회피) -> 카운터 스티어링(복귀 시도) -> 정지
     const knots = [
-        {t: 0, v: 80, s: 0},    // 직진
-        {t: 1, v: 78, s: 15},   // 회피 시작 (우측 조향)
-        {t: 2, v: 60, s: -20},  // 반대 방향 급조향 (카운터)
-        {t: 3, v: 35, s: -5},   // 수습 시도
-        {t: 4, v: 12, s: 0},    // 급감속
-        {t: 5, v: 0, s: 0}      // 최종 정지
+        {t: 0, v: 80, s: 0},    
+        {t: 1, v: 76, s: 15},   
+        {t: 2, v: 65, s: -20},  
+        {t: 3, v: 5, s: -5},    
+        {t: 4, v: 0, s: 0},     
+        {t: 5, v: 0, s: 0}      
     ];
 
     function initCharts() {
@@ -124,13 +124,18 @@
             data: {
                 labels: [],
                 datasets: [
-                    { label: '속도 (km/h)', yAxisID: 'y-speed', data: [], borderColor: '#deff9a', borderWidth: 2, pointRadius: 0, tension: 0.4, fill: false },
+                    { label: '속도 (km/h)', yAxisID: 'y-speed', data: [], borderColor: '#deff9a', borderWidth: 2, pointRadius: 0, tension: 0.2, fill: false },
                     { label: '이동 거리 (m)', yAxisID: 'y-dist', data: [], borderColor: '#3b82f6', backgroundColor: 'rgba(59, 130, 246, 0.1)', borderWidth: 1, pointRadius: 0, fill: true, tension: 0.1 },
                     { 
                         label: '원천 데이터(1Hz)', yAxisID: 'y-speed', 
                         data: knots.map(k => ({x: k.t, y: k.v})), 
                         borderColor: '#ef4444', backgroundColor: '#ef4444', 
                         showLine: false, pointRadius: 7, pointStyle: 'rectRot', zIndex: 20
+                    },
+                    {
+                        label: '사고 지점', yAxisID: 'y-speed',
+                        data: [], borderColor: '#ef4444', backgroundColor: '#ef4444',
+                        showLine: false, pointRadius: 12, pointStyle: 'circle', zIndex: 30
                     }
                 ]
             },
@@ -142,7 +147,7 @@
                     'y-speed': { type: 'linear', position: 'left', min: 0, max: 100, ticks: { color: '#deff9a' }, grid: { color: '#111' } },
                     'y-dist': { type: 'linear', position: 'right', min: 0, max: 100, ticks: { color: '#3b82f6' }, grid: { display: false } }
                 },
-                plugins: { legend: { display: false }, datalabels: { display: false } }
+                plugins: { legend: { display: false } }
             }
         });
 
@@ -150,24 +155,35 @@
         pathChart = new Chart(ctxP, {
             type: 'scatter',
             data: {
-                datasets: [{
-                    label: '복원된 주행 경로 (X-Y)',
-                    data: [],
-                    borderColor: '#a855f7',
-                    borderWidth: 3,
-                    showLine: true,
-                    pointRadius: 0,
-                    tension: 0.3
-                }]
+                datasets: [
+                    {
+                        label: '복원된 주행 경로',
+                        data: [],
+                        borderColor: '#a855f7',
+                        borderWidth: 3,
+                        showLine: true,
+                        pointRadius: 0,
+                        tension: 0.3
+                    },
+                    {
+                        label: '충격 위치',
+                        data: [],
+                        borderColor: '#ef4444',
+                        backgroundColor: '#ef4444',
+                        pointRadius: 15,
+                        pointStyle: 'crossRot',
+                        zIndex: 40
+                    }
+                ]
             },
             options: {
                 responsive: true, maintainAspectRatio: false,
                 layout: { padding: { top: 40, left: 10, right: 10, bottom: 10 } },
                 scales: {
-                    x: { grid: { color: '#111' }, ticks: { color: '#444' }, title: { display: true, text: '횡방향 (X, m)', color: '#444', font: { size: 10 } } },
-                    y: { grid: { color: '#111' }, ticks: { color: '#444' }, title: { display: true, text: '종방향 (Y, m)', color: '#444', font: { size: 10 } } }
+                    x: { grid: { color: '#111' }, ticks: { color: '#444' }, title: { display: true, text: 'X (횡방향 m)', color: '#444' } },
+                    y: { grid: { color: '#111' }, ticks: { color: '#444' }, title: { display: true, text: 'Y (종방향 m)', color: '#444' } }
                 },
-                plugins: { legend: { display: false }, datalabels: { display: false } }
+                plugins: { legend: { display: false } }
             }
         });
     }
@@ -176,13 +192,19 @@
         const log = document.getElementById('log-list');
         log.innerHTML = '';
         const speedData = [], distData = [], pathData = [];
+        let impactPointH = [], impactPointP = [];
         
         let currentX = 0, currentY = 0; 
         let currentHeading = 0;         
         let totalDistance = 0;
         let maxG = 0, maxSteering = 0;
         
-        const dt = 0.01; // 100Hz 고정
+        let impactDetected = false;
+        let impactSampleIndex = -1;
+        let speedAtImpact = 0;
+        let impactHeading = 0; // 충돌 시점의 방향 보존
+
+        const dt = 0.01; 
 
         for (let i = 0; i < knots.length - 1; i++) {
             const startK = knots[i], endK = knots[i+1];
@@ -191,20 +213,34 @@
                 const progress = j / 100;
                 const subT = startK.t + progress;
                 
-                // 3차 스플라인(Hermite 기반) 곡선 복원
                 const t2 = progress * progress;
                 const t3 = t2 * progress;
                 const h1 = 2*t3 - 3*t2 + 1;
                 const h2 = -2*t3 + 3*t2;
                 
-                const restoredV = startK.v * h1 + endK.v * h2;
-                const restoredSteer = startK.s * h1 + endK.s * h2;
+                let restoredV = startK.v * h1 + endK.v * h2;
+                let restoredSteer = startK.s * h1 + endK.s * h2;
+
+                // --- 충돌 후 물리 엔진 (곡선 감쇠 및 관성 방향 고정) ---
+                if (impactDetected) {
+                    const samplesSinceImpact = speedData.length - impactSampleIndex;
+                    // 지수 함수적 감쇠 (Linear가 아닌 곡선 형태 구현)
+                    // V = V_start * (0.94 ^ steps) -> 자연스러운 마찰 곡선 생성
+                    const decayFactor = Math.pow(0.94, samplesSinceImpact);
+                    restoredV = (speedAtImpact * 0.3) * decayFactor;
+                    if (restoredV < 0.2) restoredV = 0;
+
+                    // 충돌 후에는 조향 능력을 상실하고 충격 당시의 관성 방향(약간의 편향 추가)으로만 진행
+                    currentHeading = impactHeading + (0.05 * Math.sin(samplesSinceImpact * 0.1)); 
+                }
+
                 const speedMS = restoredV / 3.6;
 
-                // 조향 연동 물리 적분 (Bicycle Model 적용)
-                // 조향각이 +면 우회전, -면 좌회전
-                const yawRate = (speedMS / 2.7) * Math.tan(restoredSteer * Math.PI / 180);
-                currentHeading += yawRate * dt;
+                // 물리 적분
+                if (!impactDetected) {
+                    const yawRate = (speedMS / 2.7) * Math.tan(restoredSteer * Math.PI / 180);
+                    currentHeading += yawRate * dt;
+                }
                 
                 const dy = speedMS * Math.cos(currentHeading) * dt;
                 const dx = speedMS * Math.sin(currentHeading) * dt;
@@ -216,38 +252,60 @@
                 distData.push({x: subT, y: totalDistance});
                 pathData.push({x: currentX, y: currentY});
 
-                // 가속도(G) 산출
+                let isThisImpact = false;
                 if (speedData.length > 1) {
                     const prevV = speedData[speedData.length - 2].y / 3.6;
                     const gForce = Math.abs(speedMS - prevV) / (dt * 9.8);
+                    
                     if (gForce > maxG) maxG = gForce;
+
+                    // 충격 감지 (0.6g 초과 시)
+                    if (gForce > 0.6 && !impactDetected) {
+                        impactDetected = true;
+                        isThisImpact = true;
+                        impactSampleIndex = speedData.length;
+                        speedAtImpact = speedData[speedData.length - 2].y;
+                        impactHeading = currentHeading + (15 * Math.PI / 180); // 충격 시 15도 튕겨나감 반영
+                        impactPointH.push({x: subT, y: speedAtImpact});
+                        impactPointP.push({x: currentX, y: currentY});
+                    }
                 }
                 
                 if (Math.abs(restoredSteer) > maxSteering) maxSteering = Math.abs(restoredSteer);
 
                 const item = document.createElement('div');
-                item.className = (j === 0) ? 'data-item knot' : 'data-item high-res';
                 const timeLabel = subT.toFixed(2).padEnd(4, '0');
-                item.innerHTML = `<span>[${timeLabel}s]</span> <span>${restoredV.toFixed(2)}km/h</span> <span>X:${currentX.toFixed(2)}m</span> <span>Y:${currentY.toFixed(2)}m</span>`;
+                if (isThisImpact) {
+                    item.className = 'data-item impact';
+                    item.innerHTML = `<span>[${timeLabel}s]</span> <span>!!! IMPACT !!!</span> <span>G:${maxG.toFixed(2)}</span>`;
+                } else if (impactDetected && restoredV > 0) {
+                    item.className = 'data-item inertia';
+                    item.innerHTML = `<span>[${timeLabel}s]</span> <span>(Decay Curve)</span> <span>${restoredV.toFixed(1)}km/h</span>`;
+                } else {
+                    item.className = (j === 0) ? 'data-item knot' : 'data-item high-res';
+                    item.innerHTML = `<span>[${timeLabel}s]</span> <span>${restoredV.toFixed(2)}km/h</span> <span>X:${currentX.toFixed(1)}m</span>`;
+                }
                 log.appendChild(item);
                 
-                if (j % 10 === 0) {
+                if (j % 10 === 0 || isThisImpact) {
                     log.scrollTop = log.scrollHeight;
-                    updateUI(speedData, distData, pathData, maxG, maxSteering, totalDistance);
-                    await new Promise(r => setTimeout(r, 20));
+                    updateUI(speedData, distData, pathData, maxG, maxSteering, totalDistance, impactPointH, impactPointP);
+                    await new Promise(r => setTimeout(r, isThisImpact ? 200 : 20));
                 }
             }
         }
         
-        updateUI(speedData, distData, pathData, maxG, maxSteering, totalDistance);
+        updateUI(speedData, distData, pathData, maxG, maxSteering, totalDistance, impactPointH, impactPointP);
         log.scrollTop = log.scrollHeight;
     }
 
-    function updateUI(v, d, p, g, s, dist) {
+    function updateUI(v, d, p, g, s, dist, ipH, ipP) {
         hybridChart.data.datasets[0].data = v;
         hybridChart.data.datasets[1].data = d;
+        hybridChart.data.datasets[3].data = ipH;
         hybridChart.update('none');
         pathChart.data.datasets[0].data = p;
+        pathChart.data.datasets[1].data = ipP;
         pathChart.update('none');
 
         document.getElementById('res-samples').innerText = v.length;
